@@ -647,9 +647,18 @@ vertex CellTextVertexOut cell_text_vertex(
     uniforms.use_display_p3,
     true
   );
-  // Blend it with the global bg color
+  // Blend it with the global bg color.
+  //
+  // macos-background-from-layer and the macOS glass styles zero the
+  // uniform's alpha so the host layer paints the background instead of
+  // us. The text still lands on that color, so minimum contrast and
+  // linear correction must compare against it, not against the
+  // premultiplied zero (black), which turns dark text white on a light
+  // background.
+  uchar4 global_bg_color = uniforms.bg_color;
+  if (global_bg_color.a == 0) global_bg_color.a = 255;
   float4 global_bg = load_color(
-    uniforms.bg_color,
+    global_bg_color,
     uniforms.use_display_p3,
     true
   );
