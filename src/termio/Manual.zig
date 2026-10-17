@@ -25,7 +25,11 @@ pub const Manual = struct {
 
     pub fn deinit(_: *Manual) void {}
 
-    pub fn initTerminal(_: *Manual, _: *terminal.Terminal) void {}
+    pub fn initTerminal(_: *Manual, t: *terminal.Terminal) void {
+        // The embedder's remote terminal clears and redraws its own prompt
+        // on resize and streams the result back.
+        t.prompt_redraw_remote = true;
+    }
 
     pub fn threadEnter(
         _: *Manual,

@@ -91,6 +91,13 @@ mouse_shape: mouse.Shape = .text,
 /// Per-session Glyph Protocol registrations.
 glyph_glossary: glyph.Glossary = .empty,
 
+/// cmux fork: the shell's own terminal runs elsewhere and this one only
+/// mirrors its output, so the shell's resize redraw arrives a round trip
+/// later. Resize keeps prompt rows instead of clearing them for a redraw,
+/// whatever `flags.shell_redraws_prompt` says. This describes who owns the
+/// terminal, not VT state, so a full reset keeps it.
+prompt_redraw_remote: bool = false,
+
 /// These are just a packed set of flags we may set on the terminal.
 flags: packed struct {
     // This supports a Kitty extension where programs using semantic
@@ -4054,7 +4061,10 @@ pub fn resize(
         .cols = opts.cols,
         .rows = opts.rows,
         .reflow = self.modes.get(.wraparound),
-        .prompt_redraw = self.flags.shell_redraws_prompt,
+        .prompt_redraw = if (self.prompt_redraw_remote)
+            .false
+        else
+            self.flags.shell_redraws_prompt,
     });
 
     // Alternate screen, if it exists, doesn't reflow. The primary resize
