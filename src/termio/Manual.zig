@@ -148,3 +148,28 @@ test "manual queueWrite preserves encoded user input" {
         out.items,
     );
 }
+
+test "manual resize keeps a mirrored prompt for the remote shell to redraw" {
+    // A zsh OSC 133;A carries no redraw option, so the terminal defaults to
+    // clearing prompt rows on resize. Behind a manual backend the shell runs
+    // remotely and its redraw arrives a round trip later, so clearing here
+    // blanks the prompt until then.
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    var t = try terminal.Terminal.init(testing.io, alloc, .{ .cols = 20, .rows = 5 });
+    defer t.deinit(alloc);
+
+    var manual = try Manual.init(alloc, .{});
+    defer manual.deinit();
+    manual.initTerminal(&t);
+
+    // A Cloud replay starts with a full reset; ownership must survive it.
+    t.fullReset();
+    try t.semanticPrompt(.init(.prompt_start));
+    for ("$ ls") |c| try t.print(c);
+    try t.resize(alloc, .{ .cols = 30, .rows = 5 });
+
+    const str = try t.plainString(alloc);
+    defer alloc.free(str);
+    try testing.expectEqualStrings("$ ls", str);
+}
