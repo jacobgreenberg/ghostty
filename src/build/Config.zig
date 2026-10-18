@@ -32,6 +32,7 @@ x11: bool = false,
 wayland: bool = false,
 sentry: bool = true,
 simd: bool = true,
+metal_swap_chain_count: u8 = 3,
 i18n: bool = true,
 wasm_shared: bool = true,
 
@@ -205,6 +206,12 @@ pub fn init(b: *std.Build, appVersion: []const u8, libVersion: []const u8) !Conf
 
         break :simd true;
     };
+
+    config.metal_swap_chain_count = b.option(
+        u8,
+        "metal-swap-chain-count",
+        "Metal frame buffers in flight (2 or 3). Fewer uses less GPU memory.",
+    ) orelse 3;
 
     config.wayland = b.option(
         bool,
@@ -582,6 +589,7 @@ pub fn addOptions(self: *const Config, step: *std.Build.Step.Options) !void {
     step.addOption(bool, "wayland", self.wayland);
     step.addOption(bool, "sentry", self.sentry);
     step.addOption(bool, "simd", self.simd);
+    step.addOption(u8, "metal_swap_chain_count", self.metal_swap_chain_count);
     step.addOption(bool, "i18n", self.i18n);
     step.addOption(ApprtRuntime, "app_runtime", self.app_runtime);
     step.addOption(FontBackend, "font_backend", self.font_backend);

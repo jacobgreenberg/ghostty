@@ -38,8 +38,11 @@ pub const custom_shader_target: shadertoy.Target = .msl;
 // The fragCoord for Metal shaders is +Y = down.
 pub const custom_shader_y_is_down = true;
 
-/// Triple buffering.
-pub const swap_chain_count = 3;
+/// Triple buffering by default, `-Dmetal-swap-chain-count=2` for double.
+pub const swap_chain_count = @import("build_options").metal_swap_chain_count;
+comptime {
+    std.debug.assert(swap_chain_count >= 2 and swap_chain_count <= 3);
+}
 
 const log = std.log.scoped(.metal);
 
