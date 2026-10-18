@@ -1440,7 +1440,9 @@ scrollbar: Scrollbar = .system,
 /// A default link that matches a URL and opens it in the system opener always
 /// exists. This can be disabled using `link-url`.
 ///
-/// TODO: This can't currently be set!
+/// Syntax: `link = regex:<pattern>,action:open,highlight:hover_mods`.
+/// `action` is only `open`; `highlight` is `always`, `hover`, `always_mods`
+/// or `hover_mods` (default; ctrl, or cmd on macOS).
 link: RepeatableLink = .{},
 
 /// Enable URL matching. URLs are matched on hover with control (Linux) or
@@ -3944,6 +3946,34 @@ test "Config: default URL and path links use owned candidate scopes" {
     try std.testing.expect(config.link.links.items[1].hard_wrap_continuations);
     try std.testing.expect(!config.link.links.items[0].hard_wrap_match_delimiter);
     try std.testing.expect(config.link.links.items[1].hard_wrap_match_delimiter);
+}
+
+test "Config: link parseCLI" {
+    const testing = std.testing;
+    try @import("oniguruma").testing.ensureInit();
+    var config = try Config.default(testing.allocator);
+    defer config.deinit();
+    const a = config.arenaAlloc();
+
+    try config.link.parseCLI(a, "regex:\\b[A-Z][A-Z0-9]{1,5}-[0-9]+\\b,action:open,highlight:hover_mods");
+    try testing.expectEqual(@as(usize, default_link_matcher_count + 1), config.link.links.items.len);
+    const l = config.link.links.items[default_link_matcher_count];
+    try testing.expectEqualStrings("\\b[A-Z][A-Z0-9]{1,5}-[0-9]+\\b", l.regex);
+    try testing.expect(l.highlight == .hover_mods);
+    try config.link.parseCLI(a, "regex:foo,highlight:always");
+    try testing.expect(config.link.links.items[default_link_matcher_count + 1].highlight == .always);
+
+    try testing.expectError(error.InvalidValue, config.link.parseCLI(a, "foo"));
+    try testing.expectError(error.InvalidValue, config.link.parseCLI(a, "regex:(,action:open"));
+    try testing.expectError(error.InvalidValue, config.link.parseCLI(a, "regex:x,action:nope"));
+
+    // Survives clone + finalize with defaults intact; empty value resets to defaults.
+    var c2 = try config.clone(testing.allocator);
+    defer c2.deinit();
+    try c2.finalize();
+    try testing.expectEqual(@as(usize, default_link_matcher_count + 2), c2.link.links.items.len);
+    try c2.link.parseCLI(c2.arenaAlloc(), "");
+    try testing.expectEqual(@as(usize, default_link_matcher_count), c2.link.links.items.len);
 }
 
 test "Config: disabling URL links is idempotent and preserves custom matchers" {
@@ -8650,11 +8680,64 @@ pub const RepeatableLink = struct {
         self.default_matchers_present = false;
     }
 
+    /// Parse `regex:<pattern>[,action:open][,highlight:<h>]`. The pattern may
+    /// itself contain commas: the options are split off from the right.
+    /// `highlight` is one of `always`, `hover`, `always_mods`, `hover_mods`
+    /// (the `*_mods` forms use ctrl, or cmd on macOS); the default is
+    /// `hover_mods`. An empty value drops all user links (defaults stay).
     pub fn parseCLI(self: *Self, alloc: Allocator, input_: ?[]const u8) !void {
-        _ = self;
-        _ = alloc;
-        _ = input_;
-        return error.NotImplemented;
+        const input = input_ orelse return error.ValueRequired;
+        if (input.len == 0) {
+            const keep: usize = if (self.default_matchers_present) default_link_matcher_count else 0;
+            self.links.shrinkRetainingCapacity(keep);
+            return;
+        }
+
+        const prefix = "regex:";
+        if (!std.mem.startsWith(u8, input, prefix)) return error.InvalidValue;
+        const rest = input[prefix.len..];
+
+        // Options start at the earliest of the last ",action:" / ",highlight:".
+        var end = rest.len;
+        for ([_][]const u8{ ",action:", ",highlight:" }) |key| {
+            if (std.mem.lastIndexOf(u8, rest, key)) |i| end = @min(end, i);
+        }
+        const pattern = rest[0..end];
+        if (pattern.len == 0) return error.InvalidValue;
+
+        var link: inputpkg.Link = .{
+            .regex = try alloc.dupe(u8, pattern),
+            .action = .{ .open = {} },
+            .highlight = .{ .hover_mods = inputpkg.ctrlOrSuper(.{}) },
+        };
+        if (end < rest.len) {
+            var it = std.mem.splitScalar(u8, rest[end + 1 ..], ',');
+            while (it.next()) |opt| {
+                const colon = std.mem.indexOfScalar(u8, opt, ':') orelse return error.InvalidValue;
+                const k = opt[0..colon];
+                const v = opt[colon + 1 ..];
+                if (std.mem.eql(u8, k, "action")) {
+                    if (!std.mem.eql(u8, v, "open")) return error.InvalidValue;
+                } else if (std.mem.eql(u8, k, "highlight")) {
+                    link.highlight = if (std.mem.eql(u8, v, "always"))
+                        .{ .always = {} }
+                    else if (std.mem.eql(u8, v, "hover"))
+                        .{ .hover = {} }
+                    else if (std.mem.eql(u8, v, "always_mods"))
+                        .{ .always_mods = inputpkg.ctrlOrSuper(.{}) }
+                    else if (std.mem.eql(u8, v, "hover_mods"))
+                        .{ .hover_mods = inputpkg.ctrlOrSuper(.{}) }
+                    else
+                        return error.InvalidValue;
+                } else return error.InvalidValue;
+            }
+        }
+
+        // Reject patterns that don't compile rather than failing later in a surface.
+        var re = link.oniRegex() catch return error.InvalidValue;
+        re.deinit();
+
+        try self.links.append(alloc, link);
     }
 
     /// Deep copy of the struct. Required by Config.
@@ -8694,7 +8777,7 @@ pub const RepeatableLink = struct {
 
     /// Used by Formatter
     pub fn formatEntry(self: Self, formatter: formatterpkg.EntryFormatter) !void {
-        // This currently can't be set so we don't format anything.
+        // User links are not round-tripped by +show-config.
         _ = self;
         _ = formatter;
     }
