@@ -1368,15 +1368,8 @@ fn threadMain_(self: *Thread) !void {
     // Send an initial wakeup message so that we render right away.
     try self.wakeup.notify();
 
-    // Start blinking the cursor.
-    self.cursor_h.run(
-        &self.loop,
-        &self.cursor_c,
-        cursorBlinkInterval(),
-        Thread,
-        self,
-        cursorTimerCallback,
-    );
+    // The cursor timer is armed by syncCursorTimer once a frame shows the
+    // cursor is actually blinking.
 
     // Start the draw timer
     self.syncDrawTimer();
@@ -1695,17 +1688,29 @@ fn applyFocused(self: *Thread, value: bool, external_drain: bool) !void {
         return;
     }
 
-    if (self.cursor_c.state() != .active) {
-        self.flags.cursor_blink_visible = true;
-        self.cursor_h.run(
-            &self.loop,
-            &self.cursor_c,
-            cursorBlinkInterval(),
-            Thread,
-            self,
-            cursorTimerCallback,
-        );
-    }
+    self.syncCursorTimer();
+}
+
+/// Arm the cursor blink timer if (and only if) the cursor is blinking and
+/// we're focused and visible. Idle non-blinking surfaces then never wake.
+/// The timer disarms itself when these stop holding, so this is the only
+/// place that needs to re-arm: call it after the render state is updated
+/// (DECSCUSR/config change) and on focus/visibility gain.
+fn syncCursorTimer(self: *Thread) void {
+    if (self.externalDrainActive()) return;
+    if (!self.flags.focused or !self.flags.visible) return;
+    if (self.cursor_c.state() == .active) return;
+    if (!self.renderer.terminal_state.cursor.blinking) return;
+
+    self.flags.cursor_blink_visible = true;
+    self.cursor_h.run(
+        &self.loop,
+        &self.cursor_c,
+        cursorBlinkInterval(),
+        Thread,
+        self,
+        cursorTimerCallback,
+    );
 }
 
 fn applyDisplayID(self: *Thread, value: u32) !void {
@@ -1734,6 +1739,7 @@ fn updateVisibilityRegainFrame(self: *Thread) bool {
         log.warn("error rendering err={}", .{err});
         return false;
     };
+    self.syncCursorTimer();
     return true;
 }
 
@@ -2168,6 +2174,7 @@ fn renderCallback(
     // Update our frame data
     t.updateFrame(t.flags.cursor_blink_visible) catch |err|
         log.warn("error rendering err={}", .{err});
+    t.syncCursorTimer();
 
     // Draw
     _ = t.drawFrame(false);
@@ -3195,6 +3202,18 @@ fn cursorTimerCallback(
         return .disarm;
     };
     if (t.externalDrainActive()) return .disarm;
+
+    // Stop ticking when the cursor no longer blinks or can't be seen;
+    // syncCursorTimer re-arms. Make sure a steady cursor ends up drawn.
+    if (!t.flags.focused or !t.flags.visible or
+        !t.renderer.terminal_state.cursor.blinking)
+    {
+        if (!t.flags.cursor_blink_visible) {
+            t.flags.cursor_blink_visible = true;
+            t.wakeup.notify() catch {};
+        }
+        return .disarm;
+    }
 
     t.flags.cursor_blink_visible = !t.flags.cursor_blink_visible;
     t.wakeup.notify() catch {};
